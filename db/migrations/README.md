@@ -16,9 +16,11 @@ atlas migrate validate --env local
 If a generated migration needs adjustment, keep the final migration aligned with
 `db/schema.sql` and re-run validation before merge.
 
-For Phase 1, this directory may contain only this README. Use checksum
-validation until the first generated migration exists:
+## Migration history
 
-```sh
-atlas migrate validate --dir file://db/migrations
-```
+**`20260706000000_baseline.sql`** — Hand-authored from `db/schema.sql`. Local
+`atlas migrate diff` is blocked for schemas that contain triggers without an
+Atlas login (libsql/sqlite trigger support requires the Atlas cloud login flow).
+The baseline was therefore written by hand and hashed with `atlas migrate hash`.
+Future schema changes should still follow the Atlas-generated workflow above
+once the trigger-diff limitation is resolved or an Atlas login is available.

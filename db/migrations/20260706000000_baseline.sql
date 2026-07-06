@@ -1,17 +1,9 @@
--- Canonical Mist database schema.
---
--- mist-schema is now the authoritative owner of this schema. Atlas treats this
--- file as the desired schema state and derives migration history from it.
---
--- This schema was imported from mist-setup
--- (internal/runtimeopsqlc/schema.sql) as the Phase 2 source of truth. That file
--- was the prior canonical SQL DDL mirror of the runtime operational database,
--- kept in sync with internal/configschema/configschema.go. Ownership now lives
--- here; consumer repositories (mist-web, mist-stripe, mist-setup) sync pinned
--- copies of this file for sqlc generation rather than owning the schema.
+-- Baseline migration: initial schema.
+-- Hand-authored from db/schema.sql because local Atlas trigger diff requires
+-- atlas login (libsql/sqlite trigger support). Future migrations should be
+-- Atlas-generated via `atlas migrate diff <name> --env turso_test`.
 
--- runtime_config: authoritative per-instance runtime configuration rows.
-CREATE TABLE IF NOT EXISTS runtime_config (
+CREATE TABLE runtime_config (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     config_id      TEXT    NOT NULL,
     config_version INTEGER NOT NULL DEFAULT 1,
@@ -20,12 +12,10 @@ CREATE TABLE IF NOT EXISTS runtime_config (
     deleted_at     INTEGER,
     config_json    TEXT    NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_config_config_id
+CREATE UNIQUE INDEX idx_runtime_config_config_id
     ON runtime_config(config_id) WHERE deleted_at IS NULL;
 
--- agent_state: singleton row holding all global WhatsApp/runtime fields.
--- Enforces singleton with CHECK(id = 1).
-CREATE TABLE IF NOT EXISTS agent_state (
+CREATE TABLE agent_state (
     id                        INTEGER PRIMARY KEY CHECK(id = 1),
     whatsapp_status           TEXT,
     whatsapp_connected        INTEGER NOT NULL DEFAULT 0 CHECK(whatsapp_connected IN (0,1)),
@@ -41,8 +31,7 @@ CREATE TABLE IF NOT EXISTS agent_state (
     deleted_at                INTEGER
 );
 
--- conversation_state: per-conversation tracking for the AI plane.
-CREATE TABLE IF NOT EXISTS conversation_state (
+CREATE TABLE conversation_state (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id          TEXT    NOT NULL,
     last_seen_config_version INTEGER,
@@ -51,16 +40,10 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     updated_at               INTEGER NOT NULL DEFAULT 0,
     deleted_at               INTEGER
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_state_conversation_id
+CREATE UNIQUE INDEX idx_conversation_state_conversation_id
     ON conversation_state(conversation_id) WHERE deleted_at IS NULL;
 
--- school_settings: singleton (CHECK(id = 1)) holding the school's required
--- operational IANA timezone as authoritative first-class DB data. Not seeded;
--- the absence of the row means the timezone is unset and session creation is
--- gated. The timezone CHECK is a coarse shape guard only (non-empty, trimmed,
--- slash-free, no '+'/space). Go validates the runtime IANA value before
--- encoding '/' as '%2F' for persistence. All timestamps are UTC Unix ms.
-CREATE TABLE IF NOT EXISTS school_settings (
+CREATE TABLE school_settings (
     id         INTEGER PRIMARY KEY CHECK(id = 1),
     timezone   TEXT    NOT NULL
         CHECK(timezone <> '' AND timezone = TRIM(timezone)
@@ -72,16 +55,14 @@ CREATE TABLE IF NOT EXISTS school_settings (
     updated_at INTEGER NOT NULL DEFAULT 0,
     deleted_at INTEGER
 );
-CREATE TRIGGER IF NOT EXISTS trg_school_settings_currency_immutable
+CREATE TRIGGER trg_school_settings_currency_immutable
     BEFORE UPDATE OF currency ON school_settings
     WHEN OLD.currency <> NEW.currency
 BEGIN
     SELECT RAISE(ABORT, 'school_settings currency is setup-once immutable');
 END;
 
--- customers: one row per known customer; whatsapp_phone is the primary identity.
--- Uniqueness enforced by partial index on active (non-deleted) rows.
-CREATE TABLE IF NOT EXISTS customers (
+CREATE TABLE customers (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     whatsapp_phone TEXT    NOT NULL
         CHECK(whatsapp_phone GLOB '[1-9]*'
@@ -98,14 +79,6 @@ CREATE TABLE IF NOT EXISTS customers (
           AND email = LOWER(email)
           AND email = TRIM(email)),
     notes          TEXT,
-    -- preferred_language: required BCP47-ish language tag, stored normalized
-    -- lowercase (e.g. 'en', 'fr', 'pt-br'). NOT NULL so every customer carries an
-    -- explicit language for student WhatsApp reminders. Every agent-facing
-    -- customer-creation path supplies it explicitly and validates it as required:
-    -- upsert_customer, and the create_booking/create_inquiry auto-create-by-phone
-    -- path. DEFAULT 'en' is only a schema-level backstop for direct/auxiliary SQL
-    -- inserts (e.g. trigger/constraint unit tests); no agent path relies on it. The
-    -- reminder/notice dispatcher uses it to pick a localized message.
     preferred_language TEXT NOT NULL DEFAULT 'en'
         CHECK(preferred_language <> ''
           AND preferred_language = TRIM(preferred_language)
@@ -116,15 +89,10 @@ CREATE TABLE IF NOT EXISTS customers (
     updated_at     INTEGER NOT NULL DEFAULT 0,
     deleted_at     INTEGER
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_whatsapp_phone
+CREATE UNIQUE INDEX idx_customers_whatsapp_phone
     ON customers(whatsapp_phone) WHERE deleted_at IS NULL;
 
--- offering_templates: combined catalog and recurring weekly schedule.
--- Each row is a concrete template: name identifies the offering,
--- weekday+time_slot define the recurrence. Uniqueness of active
--- (name, weekday, time_slot) combinations enforced by partial unique index.
--- default_price_cents is required so every template can produce priced sessions.
-CREATE TABLE IF NOT EXISTS offering_templates (
+CREATE TABLE offering_templates (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT    NOT NULL
         CHECK(name <> '' AND name = TRIM(name)),
@@ -142,30 +110,18 @@ CREATE TABLE IF NOT EXISTS offering_templates (
     updated_at          INTEGER NOT NULL DEFAULT 0,
     deleted_at          INTEGER
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_offering_templates_slot
+CREATE UNIQUE INDEX idx_offering_templates_slot
     ON offering_templates(name, weekday, time_slot) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_offering_templates_name
+CREATE INDEX idx_offering_templates_name
     ON offering_templates(name) WHERE deleted_at IS NULL;
 
--- sessions: concrete future lesson times; independent snapshots with no FK to
--- offerings/templates so the catalog can change after sessions are created.
--- date and time_slot are calendar/clock strings. cancelled_at is UTC Unix ms.
--- capacity and min_capacity are both required (NOT NULL): every session has a
--- maximum and a minimum participant target, and min_capacity must be in
--- 1..capacity. booked_capacity is incremented/decremented transactionally on
--- booking create/cancel; the table CHECKs enforce it never exceeds capacity and
--- never sits in an active below-minimum state (it must be exactly 0 or at least
--- min_capacity). Empty sessions stay allowed.
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE sessions (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     offering_name       TEXT    NOT NULL
         CHECK(offering_name <> '' AND offering_name = TRIM(offering_name)),
     date                TEXT    NOT NULL CHECK(date <> '' AND date = TRIM(date)),
     time_slot           TEXT    NOT NULL
         CHECK(time_slot <> '' AND time_slot = TRIM(time_slot)),
-    -- starts_at_ms: canonical UTC Unix ms instant for the session, derived from
-    -- the school-local date/time using the required school_settings timezone.
-    -- Clean-slate reset/init stores it as NOT NULL.
     starts_at_ms        INTEGER NOT NULL CHECK(starts_at_ms > 0),
     capacity            INTEGER NOT NULL CHECK(capacity > 0),
     min_capacity        INTEGER NOT NULL CHECK(min_capacity >= 1) CHECK(min_capacity <= capacity),
@@ -181,20 +137,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     CHECK(booked_capacity <= capacity),
     CHECK(booked_capacity = 0 OR booked_capacity >= min_capacity)
 );
-CREATE INDEX IF NOT EXISTS idx_sessions_slot
+CREATE INDEX idx_sessions_slot
     ON sessions(offering_name, date, time_slot, status);
-CREATE INDEX IF NOT EXISTS idx_sessions_date
+CREATE INDEX idx_sessions_date
     ON sessions(date, status);
--- Reminder/time-range query path: select scheduled sessions by canonical UTC
--- instant.
-CREATE INDEX IF NOT EXISTS idx_sessions_starts_at
+CREATE INDEX idx_sessions_starts_at
     ON sessions(starts_at_ms, status);
 
--- inquiries: a customer's interest in a session before confirming.
--- session_id is NOT NULL: an inquiry must always reference a concrete sessions.id;
--- create_inquiry requires a positive session_id matching a scheduled session.
--- converted_at is UTC Unix ms.
-CREATE TABLE IF NOT EXISTS inquiries (
+CREATE TABLE inquiries (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     customer_id            INTEGER NOT NULL,
     status                 TEXT    NOT NULL
@@ -217,28 +167,18 @@ CREATE TABLE IF NOT EXISTS inquiries (
     FOREIGN KEY(customer_id) REFERENCES customers(id),
     FOREIGN KEY(session_id)  REFERENCES sessions(id)
 );
-CREATE INDEX IF NOT EXISTS idx_inquiries_slot
+CREATE INDEX idx_inquiries_slot
     ON inquiries(offering_name, date, time_slot, status);
-CREATE INDEX IF NOT EXISTS idx_inquiries_customer
+CREATE INDEX idx_inquiries_customer
     ON inquiries(customer_id, date, status);
-CREATE INDEX IF NOT EXISTS idx_inquiries_customer_fk
+CREATE INDEX idx_inquiries_customer_fk
     ON inquiries(customer_id);
-CREATE INDEX IF NOT EXISTS idx_inquiries_session
+CREATE INDEX idx_inquiries_session
     ON inquiries(session_id) WHERE session_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_inquiries_session_fk
+CREATE INDEX idx_inquiries_session_fk
     ON inquiries(session_id);
 
--- bookings: customer reservation for a session. Stripe-enabled instances create
--- pending_payment/unpaid bookings until webhook confirmation; non-Stripe
--- instances create confirmed/not_required bookings directly.
--- session_id is NOT NULL: a booking must always reference a concrete sessions.id.
--- cancelled_at is UTC Unix ms.
--- A booking carries NO date/time_slot or price snapshot: the referenced session
--- is the single source of truth for schedule (sessions.date, sessions.time_slot,
--- sessions.starts_at_ms) and amount (sessions.price_cents). Read/query surfaces
--- join sessions for derived fields, so a session reschedule/reprice is reflected
--- without copying data back.
-CREATE TABLE IF NOT EXISTS bookings (
+CREATE TABLE bookings (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     customer_id         INTEGER NOT NULL,
     status              TEXT    NOT NULL
@@ -263,28 +203,22 @@ CREATE TABLE IF NOT EXISTS bookings (
     FOREIGN KEY(customer_id) REFERENCES customers(id),
     FOREIGN KEY(session_id)  REFERENCES sessions(id)
 );
-CREATE INDEX IF NOT EXISTS idx_bookings_customer
+CREATE INDEX idx_bookings_customer
     ON bookings(customer_id, status);
-CREATE INDEX IF NOT EXISTS idx_bookings_customer_fk
+CREATE INDEX idx_bookings_customer_fk
     ON bookings(customer_id);
-CREATE INDEX IF NOT EXISTS idx_bookings_session
+CREATE INDEX idx_bookings_session
     ON bookings(session_id) WHERE session_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_bookings_session_fk
+CREATE INDEX idx_bookings_session_fk
     ON bookings(session_id);
-CREATE TRIGGER IF NOT EXISTS trg_bookings_mark_confirmed_after_paid
+CREATE TRIGGER trg_bookings_mark_confirmed_after_paid
     AFTER UPDATE OF payment_status ON bookings
     WHEN NEW.payment_status = 'paid' AND NEW.status = 'pending_payment'
 BEGIN
     UPDATE bookings SET status = 'confirmed' WHERE id = NEW.id;
 END;
 
--- reminder_dispatch: idempotency record of which reminder has been sent for
--- each booking. Partial unique index enforces one row per (booking, kind).
--- sent_at is UTC Unix ms. reminder_rule_key/reminder_rule_version are the
--- optional stable identity of the reminder_rule that produced this dispatch;
--- they are nullable so the prior reminder_kind-only record-sent contract still
--- works unchanged, while newer dispatches can stamp the rule revision they ran.
-CREATE TABLE IF NOT EXISTS reminder_dispatch (
+CREATE TABLE reminder_dispatch (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     booking_id    INTEGER NOT NULL,
     reminder_kind TEXT    NOT NULL
@@ -303,17 +237,12 @@ CREATE TABLE IF NOT EXISTS reminder_dispatch (
     deleted_at    INTEGER,
     FOREIGN KEY(booking_id) REFERENCES bookings(id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_dispatch_lookup
+CREATE UNIQUE INDEX idx_reminder_dispatch_lookup
     ON reminder_dispatch(booking_id, reminder_kind) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_reminder_dispatch_booking_fk
+CREATE INDEX idx_reminder_dispatch_booking_fk
     ON reminder_dispatch(booking_id);
 
--- schedule_change_notice: enqueued notification per affected booking when a
--- session is cancelled. Partial unique index prevents duplicate enqueue.
--- session_id is NOT NULL: every notice is enqueued from a concrete session
--- cancellation, so it always references that session. enqueued_at and sent_at
--- are UTC Unix ms.
-CREATE TABLE IF NOT EXISTS schedule_change_notice (
+CREATE TABLE schedule_change_notice (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     booking_id  INTEGER NOT NULL,
     session_id  INTEGER NOT NULL,
@@ -331,25 +260,18 @@ CREATE TABLE IF NOT EXISTS schedule_change_notice (
     FOREIGN KEY(booking_id) REFERENCES bookings(id),
     FOREIGN KEY(session_id) REFERENCES sessions(id)
 );
-CREATE INDEX IF NOT EXISTS idx_schedule_change_notice_lookup
+CREATE INDEX idx_schedule_change_notice_lookup
     ON schedule_change_notice(status, booking_id, change_kind);
-CREATE INDEX IF NOT EXISTS idx_schedule_change_notice_booking_fk
+CREATE INDEX idx_schedule_change_notice_booking_fk
     ON schedule_change_notice(booking_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_change_notice_dedup
+CREATE UNIQUE INDEX idx_schedule_change_notice_dedup
     ON schedule_change_notice(booking_id, change_kind) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_schedule_change_notice_session
+CREATE INDEX idx_schedule_change_notice_session
     ON schedule_change_notice(session_id) WHERE session_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_schedule_change_notice_session_fk
+CREATE INDEX idx_schedule_change_notice_session_fk
     ON schedule_change_notice(session_id);
 
--- reminder_rule: durable, bounded set of booking-reminder rules. rule_key is the
--- stable identity (unique among active rows); version is a monotonic revision
--- counter bumped on each material change so reminder_dispatch rows can reference
--- the exact rule revision they ran. reminder_kind stays the dedup partition that
--- reminder_dispatch keys on. status enables/disables a rule without soft-delete;
--- deleted_at remains the soft-delete mechanism. offset_minutes is the lead time
--- (minutes before booking start) at which the reminder is due.
-CREATE TABLE IF NOT EXISTS reminder_rule (
+CREATE TABLE reminder_rule (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     rule_key       TEXT    NOT NULL
         CHECK(rule_key <> '' AND rule_key = TRIM(rule_key) AND rule_key = LOWER(rule_key)),
@@ -372,16 +294,12 @@ CREATE TABLE IF NOT EXISTS reminder_rule (
     updated_at     INTEGER NOT NULL DEFAULT 0,
     deleted_at     INTEGER
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_rule_key
+CREATE UNIQUE INDEX idx_reminder_rule_key
     ON reminder_rule(rule_key) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_reminder_rule_status
+CREATE INDEX idx_reminder_rule_status
     ON reminder_rule(status) WHERE deleted_at IS NULL;
 
--- schedule_change_rule: durable enable/disable switches for proactive
--- schedule-change notices. The product-owned systemd timer is installed and
--- enabled by setup, but the dispatcher only sends notice kinds with an active
--- rule. This mirrors booking-reminder rules without lead-time windows.
-CREATE TABLE IF NOT EXISTS schedule_change_rule (
+CREATE TABLE schedule_change_rule (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     rule_key       TEXT    NOT NULL
         CHECK(rule_key <> '' AND rule_key = TRIM(rule_key) AND rule_key = LOWER(rule_key)),
@@ -402,24 +320,14 @@ CREATE TABLE IF NOT EXISTS schedule_change_rule (
     updated_at     INTEGER NOT NULL DEFAULT 0,
     deleted_at     INTEGER
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_change_rule_key
+CREATE UNIQUE INDEX idx_schedule_change_rule_key
     ON schedule_change_rule(rule_key) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_change_rule_kind
+CREATE UNIQUE INDEX idx_schedule_change_rule_kind
     ON schedule_change_rule(change_kind) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_schedule_change_rule_status
+CREATE INDEX idx_schedule_change_rule_status
     ON schedule_change_rule(status) WHERE deleted_at IS NULL;
 
--- reminder_failure: durable retry/failure metadata for reminders the dispatcher
--- could not deliver on a pass (render/send/missing-contact/record-after-send).
--- One active row per (booking_id, reminder_kind) — the same dedup partition
--- reminder_dispatch keys on — enforced by the partial unique index. attempt_count
--- / last_attempt_at / next_retry_after drive the retry backoff; expires_at is the
--- hard cutoff after which the reminder is abandoned; resolved_at is stamped when a
--- later pass finally delivers it, dropping the row out of the active set.
--- error_category is bounded to the four retryable failure kinds. All timestamps
--- are UTC Unix ms. No reminder is marked sent without a successful WhatsApp send,
--- so a failure row never coexists with a reminder_dispatch row for the same key.
-CREATE TABLE IF NOT EXISTS reminder_failure (
+CREATE TABLE reminder_failure (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     booking_id       INTEGER NOT NULL,
     reminder_kind    TEXT    NOT NULL
@@ -437,23 +345,14 @@ CREATE TABLE IF NOT EXISTS reminder_failure (
     deleted_at       INTEGER,
     FOREIGN KEY(booking_id) REFERENCES bookings(id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_failure_lookup
+CREATE UNIQUE INDEX idx_reminder_failure_lookup
     ON reminder_failure(booking_id, reminder_kind) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_reminder_failure_booking_fk
+CREATE INDEX idx_reminder_failure_booking_fk
     ON reminder_failure(booking_id);
-CREATE INDEX IF NOT EXISTS idx_reminder_failure_active
+CREATE INDEX idx_reminder_failure_active
     ON reminder_failure(next_retry_after) WHERE deleted_at IS NULL AND resolved_at IS NULL;
 
--- schedule_change_failure: durable retry/failure metadata for schedule-change
--- notices the dispatcher could not deliver on a pass (render/send/missing-contact/
--- record-after-send). It mirrors reminder_failure exactly, keyed on the
--- schedule_change_notice dedup partition (booking_id, change_kind). One active row
--- per key (enforced by the partial unique index). attempt_count / last_attempt_at
--- / next_retry_after drive the retry backoff; expires_at is the hard cutoff after
--- which the notice is abandoned; resolved_at is stamped when a later pass finally
--- delivers it, dropping the row out of the active set. error_category is bounded to
--- the four retryable failure kinds. All timestamps are UTC Unix ms.
-CREATE TABLE IF NOT EXISTS schedule_change_failure (
+CREATE TABLE schedule_change_failure (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     booking_id       INTEGER NOT NULL,
     change_kind      TEXT    NOT NULL
@@ -471,9 +370,9 @@ CREATE TABLE IF NOT EXISTS schedule_change_failure (
     deleted_at       INTEGER,
     FOREIGN KEY(booking_id) REFERENCES bookings(id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_change_failure_lookup
+CREATE UNIQUE INDEX idx_schedule_change_failure_lookup
     ON schedule_change_failure(booking_id, change_kind) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_schedule_change_failure_booking_fk
+CREATE INDEX idx_schedule_change_failure_booking_fk
     ON schedule_change_failure(booking_id);
-CREATE INDEX IF NOT EXISTS idx_schedule_change_failure_active
+CREATE INDEX idx_schedule_change_failure_active
     ON schedule_change_failure(next_retry_after) WHERE deleted_at IS NULL AND resolved_at IS NULL;
