@@ -30,13 +30,147 @@ Meaning:
 - repair it
 - do not normalize it into policy
 
+## Atlas vs sqlc role split
+
+### Atlas owns
+
+Use Atlas for:
+
+- canonical schema definition
+- migration generation and review
+- migration application
+- drift inspection and validation
+
+Atlas is the schema authority.
+
+### sqlc owns
+
+Use `sqlc` for:
+
+- service-specific query generation inside `mist-web`
+- service-specific query generation inside `mist-stripe`
+- query generation inside `mist-setup` only if it directly queries operational data
+
+`sqlc` is not the schema authority.
+
+`sqlc` is a consumer of the schema, not the owner.
+
+## Source of truth shape
+
+A single SQL schema file shared by Atlas and `sqlc` is acceptable early on.
+
+Recommended near-term source of truth:
+
+- canonical `db/schema.sql` in `mist-schema`
+- Atlas migration directory derived from and validated against that canonical schema
+- service repos vendor or sync the exact pinned `schema.sql` copy locally for `sqlc` generation
+
+Each app repo can have:
+
+- `third_party/mist-schema/schema.sql` or local `db/schema.sql` synced from canonical
+- local `db/queries/*.sql`
+- local `sqlc.yaml`
+
+This keeps one real schema owner without forcing `sqlc` to reach across repos.
+
+## Propagation model
+
+Do not make propagation implicit or magical at first.
+
+Prefer explicit pinned consumption:
+
+- `mist-schema` gets a release tag
+- each consumer repo bumps to that schema release explicitly
+- CI verifies local synced schema matches the pinned canonical release
+
+This is safer than auto-propagation because automatic fanout can silently break all repos at once.
+
+### Safer workflow
+
+1. schema change PR in `mist-schema`
+2. merge and tag a schema release
+3. bump schema version in `mist-web`
+4. bump schema version in `mist-stripe`
+5. bump schema version and rollout logic in `mist-setup`
+6. run migrations across managed instances
+
+Bump PR creation can be automated later, but merge decisions should remain explicit.
+
+## CI guardrails
+
+### In `mist-schema`
+
+- validate Atlas config
+- validate migrations apply cleanly to an empty DB
+- validate resulting DB matches canonical schema
+- drift check from migrations to schema
+- optionally lint destructive changes with policy gates
+
+### In `mist-web` and `mist-stripe`
+
+- verify pinned schema copy matches declared schema release
+- run `sqlc generate`
+- fail if generated code is stale
+- run integration tests against an ephemeral DB built from canonical schema
+- optionally assert the app binary reports the expected schema release
+
+### In `mist-setup`
+
+- verify it provisions a DB directly to latest schema
+- verify the migration runner upgrades older fixture DBs to latest
+- verify post-migration schema matches canonical
+- verify rollout status logic detects lagging instances
+
+## Local developer workflow
+
+### Schema changes
+
+Work in `mist-schema`:
+
+- edit `db/schema.sql`
+- generate and review the Atlas migration
+- validate
+- merge and tag a release
+
+### App query changes
+
+Work in `mist-web` or `mist-stripe`:
+
+- sync the latest pinned schema release
+- edit service queries
+- run `sqlc generate`
+- run tests
+
+### Setup and ops changes
+
+Work in `mist-setup`:
+
+- consume the latest schema release
+- update provisioning or migration orchestration
+- test migration rollout logic
+
+This is cleaner than editing schema in `mist-setup` and propagating outward later.
+
+## Rollout strategy for many instance DBs
+
+Because there is no production yet, keep rollout aggressive.
+
+### Provisioning
+
+- all new instances start at the latest schema immediately
+
+### Existing instance upgrades
+
+- `mist-setup` always migrates instances toward one target version: latest
+- do not support multiple long-lived schema tracks
+
 ## What to avoid
 
 ### 1. Canonical schema inside `mist-setup`
 
 Too much coupling.
 
-### 2. Duplicated schema in all three repos with sync
+### 2. Duplicated schema in all three repos with sync-as-ownership
 
 This creates:
 - multiple PRs
@@ -87,7 +221,7 @@ Make `mist-setup` the migration operator.
 Add:
 - provisioning of latest schema
 - migration of existing DBs to latest
-- status/reporting for schema convergence
+- status and reporting for schema convergence
 
 ### Phase 4
 
@@ -96,7 +230,7 @@ Tighten enforcement.
 Add:
 - CI checks for generated code freshness
 - schema release coordination automation
-- rollout dashboards/alerts if needed
+- rollout dashboards or alerts if needed
 
 ## Merge discipline rule
 
