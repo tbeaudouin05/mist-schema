@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# pre-commit: enforce SQLC generation freshness if this repo ever gains a sqlc config.
+# mist-schema is schema-only today; SQLC generation lives in consumer service repos.
+set -euo pipefail
+
+SQLC_CONFIG=""
+if [ -f sqlc.yaml ]; then
+  SQLC_CONFIG="sqlc.yaml"
+elif [ -f sqlc.yml ]; then
+  SQLC_CONFIG="sqlc.yml"
+fi
+
+if [ -z "$SQLC_CONFIG" ]; then
+  echo "[pre-commit] schema-only repo — no local SQLC config; skipping SQLC generation check."
+  exit 0
+fi
+
+echo "[pre-commit] $SQLC_CONFIG found — running sqlc generate..."
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.27.0 generate
+
+unstaged=$(git diff --name-only)
+untracked_sqlc=$(git ls-files --others --exclude-standard 2>/dev/null || true)
+if [ -n "$unstaged$untracked_sqlc" ]; then
+  echo "[pre-commit] ERROR: SQLC generation changed files that are not staged for this commit." >&2
+  if [ -n "$unstaged" ]; then
+    echo "$unstaged" | sed 's/^/  /' >&2
+  fi
+  if [ -n "$untracked_sqlc" ]; then
+    echo "$untracked_sqlc" | sed 's/^/  /' >&2
+  fi
+  exit 1
+fi
+
+echo "[pre-commit] SQLC-generated files are up to date."
