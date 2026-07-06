@@ -208,11 +208,33 @@ Include:
 
 Phase 1 scaffold:
 
-- `atlas.hcl` defines the local Atlas environment.
+- `atlas.hcl` defines the Turso/libSQL test validation environment.
 - `db/schema.sql` is the canonical desired schema.
 - `db/migrations/` stores Atlas-generated migration history.
 - `docs/schema-policy.md` records ownership, drift, and merge policy.
 - `docs/atlas-workflow.md` records local Atlas commands.
+
+## Turso/libSQL validation database
+
+`mist-schema` validates against a dedicated Turso/libSQL test database only.
+Do not point Atlas at production, staging, or any customer database from this
+repository.
+
+Atlas reads the test database credentials from environment variables:
+
+- `TURSO_DB_URL`: the dedicated test database URL, for example a `libsql://`
+  Turso URL without an auth token embedded in it
+- `TURSO_TOKEN`: an access token scoped to the dedicated test database
+
+For local use, keep those values in an ignored env file such as `.env.local`.
+In CI, provide them as CI secrets. Do not commit, print, discover, or copy real
+secret values into this repository.
+
+The Bitwarden note containing these values is named exactly
+`mist-schema secret note`.
+
+`db/schema.sql` remains the canonical desired schema. Atlas uses that file as
+the desired state for validation and migration generation.
 
 ### Phase 2
 
