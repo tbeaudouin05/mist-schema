@@ -1,0 +1,9 @@
+-- Canonical Mist database schema.
+--
+-- Atlas treats this file as the desired schema state. Keep application-owned
+-- queries and generated code in consumer repositories; this repository owns
+-- schema definition and migration history only.
+--
+-- Phase 1 intentionally starts without domain tables. Add the first real
+-- schema objects in the same change that generates the corresponding Atlas
+-- migration under db/migrations/.

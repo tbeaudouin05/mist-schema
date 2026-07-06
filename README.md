@@ -206,6 +206,14 @@ Include:
 - `db/migrations/`
 - docs for schema policy
 
+Phase 1 scaffold:
+
+- `atlas.hcl` defines the local Atlas environment.
+- `db/schema.sql` is the canonical desired schema.
+- `db/migrations/` stores Atlas-generated migration history.
+- `docs/schema-policy.md` records ownership, drift, and merge policy.
+- `docs/atlas-workflow.md` records local Atlas commands.
+
 ### Phase 2
 
 Make `mist-web`, `mist-stripe`, and `mist-setup` consume pinned schema releases.
