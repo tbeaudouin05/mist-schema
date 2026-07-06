@@ -1,3 +1,4 @@
-h1:6vuwntN9iR63Z9iT/MSM+kYVHDVG+/AyZPW0gIjZM48=
+h1:5aCjLDHwBxIP1/xDUdqI3MYwKapBrCmOwkQE64XUMOg=
 20260706000000_baseline.sql h1:X0vymFsEsdlpkNafJsx4gNok3L76CNOiTeEBWOF3kuQ=
 20260706000001_add_surf_advice_schema.sql h1:YQwNNLaFLxnQLCmfqZChLJJPjMxwYSxuCDa3JYnoZcQ=
+20260706000002_add_admin_auth_tokens.sql h1:i+6IV4+aL9QSTlR39RV8XQXe2YQOGamXvpu/y3eMuiw=
