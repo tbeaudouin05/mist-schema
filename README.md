@@ -270,3 +270,5 @@ No service PR that depends on a schema change should merge until:
 2. the consumer repo is pinned to that release.
 
 This keeps ownership and rollout disciplined early.
+
+<!-- disposable GitHub write/PR smoke test: 2026-07-14 -->
