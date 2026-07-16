@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS school_information_versions (
           AND JSON_TYPE(source_urls) = 'array'
           AND JSON_ARRAY_LENGTH(source_urls) > 0),
     created_at         INTEGER NOT NULL DEFAULT 0 CHECK(created_at >= 0),
+    updated_at         INTEGER NOT NULL DEFAULT 0,
     deleted_at         INTEGER,
     CHECK(deleted_at IS NULL OR deleted_at >= created_at),
     FOREIGN KEY(school_settings_id) REFERENCES school_settings(id)
