@@ -98,22 +98,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_state_conversation_id
     ON conversation_state(conversation_id) WHERE deleted_at IS NULL;
 
 -- school_settings: singleton (CHECK(id = 1)) holding the school's required
--- operational IANA timezone as authoritative first-class DB data. Not seeded;
+-- operational IANA timezone and approved public-information summary. Not seeded;
 -- the absence of the row means the timezone is unset and session creation is
 -- gated. The timezone CHECK is a coarse shape guard only (non-empty, trimmed,
 -- slash-free, no '+'/space). Go validates the runtime IANA value before
 -- encoding '/' as '%2F' for persistence. All timestamps are UTC Unix ms.
 CREATE TABLE IF NOT EXISTS school_settings (
-    id         INTEGER PRIMARY KEY CHECK(id = 1),
-    timezone   TEXT    NOT NULL
+    id                     INTEGER PRIMARY KEY CHECK(id = 1),
+    timezone               TEXT    NOT NULL
         CHECK(timezone <> '' AND timezone = TRIM(timezone)
           AND timezone NOT GLOB '*/*'
           AND timezone NOT GLOB '*[+ ]*'),
-    currency   TEXT    NOT NULL
+    currency               TEXT    NOT NULL
         CHECK(LENGTH(currency) = 3 AND currency = UPPER(currency)),
-    created_at INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT 0,
-    deleted_at INTEGER
+    school_website_url     TEXT,
+    school_info_summary    TEXT,
+    school_info_updated_at INTEGER,
+    created_at             INTEGER NOT NULL DEFAULT 0,
+    updated_at             INTEGER NOT NULL DEFAULT 0,
+    deleted_at             INTEGER
 );
 CREATE TRIGGER IF NOT EXISTS trg_school_settings_currency_immutable
     BEFORE UPDATE OF currency ON school_settings
@@ -121,6 +124,36 @@ CREATE TRIGGER IF NOT EXISTS trg_school_settings_currency_immutable
 BEGIN
     SELECT RAISE(ABORT, 'school_settings currency is setup-once immutable');
 END;
+
+-- school_information_versions: approved historical school detail attached to
+-- the singleton school scope. source_urls is a non-empty JSON array encoded as
+-- text. The current version is the latest active row by created_at then id.
+-- Application transactions retain the latest three active versions; retention
+-- is intentionally not enforced by a trigger. All timestamps are UTC Unix ms.
+CREATE TABLE IF NOT EXISTS school_information_versions (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_settings_id INTEGER NOT NULL CHECK(school_settings_id = 1),
+    detailed_info      TEXT    NOT NULL
+        CHECK(detailed_info <> ''
+          AND detailed_info = TRIM(detailed_info)
+          AND LENGTH(detailed_info) <= 100000),
+    source_urls        TEXT    NOT NULL
+        CHECK(source_urls <> ''
+          AND source_urls = TRIM(source_urls)
+          AND LENGTH(source_urls) <= 20000
+          AND JSON_VALID(source_urls)
+          AND JSON_TYPE(source_urls) = 'array'
+          AND JSON_ARRAY_LENGTH(source_urls) > 0),
+    created_at         INTEGER NOT NULL DEFAULT 0 CHECK(created_at >= 0),
+    deleted_at         INTEGER,
+    CHECK(deleted_at IS NULL OR deleted_at >= created_at),
+    FOREIGN KEY(school_settings_id) REFERENCES school_settings(id)
+);
+CREATE INDEX IF NOT EXISTS idx_school_information_versions_latest_active
+    ON school_information_versions(school_settings_id, created_at DESC, id DESC)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_school_information_versions_school_settings_fk
+    ON school_information_versions(school_settings_id);
 
 -- customers: one row per known customer; whatsapp_phone is the primary identity.
 -- Uniqueness enforced by partial index on active (non-deleted) rows.
