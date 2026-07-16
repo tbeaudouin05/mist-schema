@@ -162,6 +162,41 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_whatsapp_phone
     ON customers(whatsapp_phone) WHERE deleted_at IS NULL;
 
+-- customer_questions: durable questions from customers that school staff need
+-- to answer or follow up on. question_text is stored trimmed and bounded;
+-- status is the complete lifecycle. follow_up_at is the UTC Unix ms instant at
+-- which a question enters the staff follow-up queue, while resolved_at records
+-- completion. Soft-deleted rows are excluded from active dashboard indexes.
+CREATE TABLE IF NOT EXISTS customer_questions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id   INTEGER NOT NULL,
+    question_text TEXT   NOT NULL
+        CHECK(question_text <> ''
+          AND question_text = TRIM(question_text)
+          AND LENGTH(question_text) <= 2000),
+    status        TEXT    NOT NULL DEFAULT 'open'
+        CHECK(status IN ('open','follow_up','resolved')),
+    follow_up_at  INTEGER,
+    resolved_at   INTEGER,
+    created_at    INTEGER NOT NULL DEFAULT 0,
+    updated_at    INTEGER NOT NULL DEFAULT 0,
+    deleted_at    INTEGER,
+    CHECK(status <> 'follow_up' OR follow_up_at IS NOT NULL),
+    CHECK(follow_up_at IS NULL OR status IN ('follow_up','resolved')),
+    CHECK((status = 'resolved') = (resolved_at IS NOT NULL)),
+    CHECK(follow_up_at IS NULL OR follow_up_at >= created_at),
+    CHECK(resolved_at IS NULL OR resolved_at >= created_at),
+    FOREIGN KEY(customer_id) REFERENCES customers(id)
+);
+CREATE INDEX IF NOT EXISTS idx_customer_questions_customer_open
+    ON customer_questions(customer_id, created_at)
+    WHERE deleted_at IS NULL AND status = 'open';
+CREATE INDEX IF NOT EXISTS idx_customer_questions_follow_up
+    ON customer_questions(follow_up_at, customer_id)
+    WHERE deleted_at IS NULL AND status = 'follow_up';
+CREATE INDEX IF NOT EXISTS idx_customer_questions_customer_fk
+    ON customer_questions(customer_id);
+
 -- offering_templates: combined catalog and recurring weekly schedule.
 -- Each row is a concrete template: name identifies the offering,
 -- weekday+time_slot define the recurrence. Uniqueness of active
