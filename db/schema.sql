@@ -125,14 +125,28 @@ BEGIN
     SELECT RAISE(ABORT, 'school_settings currency is setup-once immutable');
 END;
 
--- school_information_versions: approved historical school detail attached to
--- the singleton school scope. source_urls is a non-empty JSON array encoded as
--- text. The current version is the latest active row by created_at then id.
--- Application transactions retain the latest three active versions; retention
--- is intentionally not enforced by a trigger. All timestamps are UTC Unix ms.
+-- school_information_versions: complete durable proposals/versions attached to
+-- the singleton school scope. Each row owns the canonical URL, concise summary,
+-- detailed information, sources, and lifecycle state. Existing rows predate the
+-- proposal workflow and are backfilled as approved; approved_at = 0 is the
+-- explicit legacy timestamp sentinel. New lifecycle timestamps are server-owned
+-- UTC Unix ms. canonical_url/summary remain nullable only for legacy rows with
+-- approved_at = 0; every pending proposal must own both fields and an expiry.
+-- Newly approved versions are unique per active school, and approval can only
+-- move on to superseded. Retention remains an application concern.
 CREATE TABLE IF NOT EXISTS school_information_versions (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     school_settings_id INTEGER NOT NULL CHECK(school_settings_id = 1),
+    status             TEXT    NOT NULL DEFAULT 'approved'
+        CHECK(status IN ('pending','approved','superseded')),
+    canonical_url      TEXT
+        CHECK(canonical_url IS NULL OR (canonical_url <> ''
+          AND canonical_url = TRIM(canonical_url)
+          AND LENGTH(canonical_url) <= 2048)),
+    summary            TEXT
+        CHECK(summary IS NULL OR (summary <> ''
+          AND summary = TRIM(summary)
+          AND LENGTH(summary) <= 1000)),
     detailed_info      TEXT    NOT NULL
         CHECK(detailed_info <> ''
           AND detailed_info = TRIM(detailed_info)
@@ -145,16 +159,52 @@ CREATE TABLE IF NOT EXISTS school_information_versions (
           AND JSON_TYPE(source_urls) = 'array'
           AND JSON_ARRAY_LENGTH(source_urls) > 0),
     created_at         INTEGER NOT NULL DEFAULT 0 CHECK(created_at >= 0),
-    updated_at         INTEGER NOT NULL DEFAULT 0,
+    updated_at         INTEGER NOT NULL DEFAULT 0 CHECK(updated_at >= 0),
+    approved_at        INTEGER NOT NULL DEFAULT 0 CHECK(approved_at >= 0),
+    superseded_at      INTEGER,
+    expires_at         INTEGER,
     deleted_at         INTEGER,
+    CHECK(status <> 'pending' OR (canonical_url IS NOT NULL
+      AND summary IS NOT NULL
+      AND approved_at = 0
+      AND superseded_at IS NULL
+      AND expires_at IS NOT NULL)),
+    CHECK(status <> 'approved' OR (approved_at >= 0 AND superseded_at IS NULL)),
+    CHECK(status <> 'superseded' OR superseded_at IS NOT NULL),
+    CHECK(approved_at = 0 OR approved_at >= created_at),
+    CHECK(superseded_at IS NULL OR superseded_at >= created_at),
+    CHECK(expires_at IS NULL OR expires_at > created_at),
     CHECK(deleted_at IS NULL OR deleted_at >= created_at),
     FOREIGN KEY(school_settings_id) REFERENCES school_settings(id)
 );
-CREATE INDEX IF NOT EXISTS idx_school_information_versions_latest_active
-    ON school_information_versions(school_settings_id, created_at DESC, id DESC)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_school_information_versions_one_approved
+    ON school_information_versions(school_settings_id)
+    WHERE deleted_at IS NULL AND status = 'approved' AND approved_at > 0;
+CREATE INDEX IF NOT EXISTS idx_school_information_versions_pending_lookup
+    ON school_information_versions(school_settings_id, status, created_at DESC, id DESC, expires_at)
+    WHERE deleted_at IS NULL AND status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_school_information_versions_retention
+    ON school_information_versions(school_settings_id, status, approved_at DESC, id DESC)
     WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_school_information_versions_school_settings_fk
     ON school_information_versions(school_settings_id);
+CREATE TRIGGER IF NOT EXISTS trg_school_information_versions_no_new_legacy_approved
+    BEFORE INSERT ON school_information_versions
+    WHEN NEW.status = 'approved'
+      AND (NEW.approved_at = 0 OR NEW.canonical_url IS NULL OR NEW.summary IS NULL)
+BEGIN
+    SELECT RAISE(ABORT, 'new approved school information must be complete and timestamped');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_school_information_versions_status_transition
+    BEFORE UPDATE OF status ON school_information_versions
+    WHEN OLD.status <> NEW.status
+      AND NOT (
+        (OLD.status = 'pending' AND NEW.status IN ('approved', 'superseded'))
+        OR (OLD.status = 'approved' AND NEW.status = 'superseded')
+      )
+BEGIN
+    SELECT RAISE(ABORT, 'invalid school information status transition');
+END;
 
 -- customers: one row per known customer; whatsapp_phone is the primary identity.
 -- Uniqueness enforced by partial index on active (non-deleted) rows.
