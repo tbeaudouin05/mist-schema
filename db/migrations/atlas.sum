@@ -1,4 +1,4 @@
-h1:oifQOk+Ov4usTGFVc+HeUmd5kGKuBaPiJftPMI166wA=
+h1:mvPo8HMgbEjc3TK8Dfc7FeNBHM9zmTK42nHegW+jK8o=
 20260706000000_baseline.sql h1:X0vymFsEsdlpkNafJsx4gNok3L76CNOiTeEBWOF3kuQ=
 20260706000001_add_surf_advice_schema.sql h1:YQwNNLaFLxnQLCmfqZChLJJPjMxwYSxuCDa3JYnoZcQ=
 20260706000002_add_admin_auth_tokens.sql h1:i+6IV4+aL9QSTlR39RV8XQXe2YQOGamXvpu/y3eMuiw=
@@ -6,3 +6,4 @@ h1:oifQOk+Ov4usTGFVc+HeUmd5kGKuBaPiJftPMI166wA=
 20260716210440_add_school_information_versions.sql h1:bhK0yjdnMrKDqTF5B4iZ6gIXpD6esRsvdU4VK4WtrcI=
 20260716211920_add-school-information-versions-updated-at.sql h1:T4N3s15hUgTBHrYYGcTtswuGbvzoNRZulVfslUwK4H8=
 20260717134538_durable-school-information-proposal-lifecycle.sql h1:QL0H+xTng3r4tj95mg8wY+ylLTmwAaay6USaM6bsyhA=
+20260717140630_repair-v024-school-information-backfill.sql h1:h12cqi5a27LHkTr0xW8l2QKkrgBIDk+EiRUnP8/nTRw=

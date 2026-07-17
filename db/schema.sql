@@ -127,13 +127,14 @@ END;
 
 -- school_information_versions: complete durable proposals/versions attached to
 -- the singleton school scope. Each row owns the canonical URL, concise summary,
--- detailed information, sources, and lifecycle state. Existing rows predate the
--- proposal workflow and are backfilled as approved; approved_at = 0 is the
--- explicit legacy timestamp sentinel. New lifecycle timestamps are server-owned
--- UTC Unix ms. canonical_url/summary remain nullable only for legacy rows with
--- approved_at = 0; every pending proposal must own both fields and an expiry.
--- Newly approved versions are unique per active school, and approval can only
--- move on to superseded. Retention remains an application concern.
+-- detailed information, sources, and lifecycle state. Legacy rows that cannot
+-- be made current without inventing canonical URL/summary facts are retained as
+-- superseded history with approved_at = 0. New lifecycle timestamps are
+-- server-owned UTC Unix ms. canonical_url/summary remain nullable only for that
+-- superseded legacy history; every pending proposal owns both fields and an
+-- expiry, and every approved version is complete and timestamped. Approved
+-- versions are unique per active school, and approval can only move on to
+-- superseded. Retention remains an application concern.
 CREATE TABLE IF NOT EXISTS school_information_versions (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     school_settings_id INTEGER NOT NULL CHECK(school_settings_id = 1),
@@ -169,7 +170,10 @@ CREATE TABLE IF NOT EXISTS school_information_versions (
       AND approved_at = 0
       AND superseded_at IS NULL
       AND expires_at IS NOT NULL)),
-    CHECK(status <> 'approved' OR (approved_at >= 0 AND superseded_at IS NULL)),
+    CHECK(status <> 'approved' OR (canonical_url IS NOT NULL
+      AND summary IS NOT NULL
+      AND approved_at > 0
+      AND superseded_at IS NULL)),
     CHECK(status <> 'superseded' OR superseded_at IS NOT NULL),
     CHECK(approved_at = 0 OR approved_at >= created_at),
     CHECK(superseded_at IS NULL OR superseded_at >= created_at),
