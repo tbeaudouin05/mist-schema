@@ -270,3 +270,5 @@ No service PR that depends on a schema change should merge until:
 2. the consumer repo is pinned to that release.
 
 This keeps ownership and rollout disciplined early.
+
+<!-- disposable cleanup-smoke test: skill-dry-run-friction-improver 2026-09-19, safe to delete -->
